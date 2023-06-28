@@ -128,7 +128,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
                 @Override
                 public void messageArrived(String topic, MqttMessage message) throws Exception {
-                    KLog.e("topic = [" + topic + "],message = [" + new String(message.getPayload()) + "]");
+                    String json = new String(message.getPayload());
+                    KLog.e("topic = [" + topic + "],message = [" + json + "]");
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(MainActivity.this, topic + ":" + json, Toast.LENGTH_SHORT).show();
+                        }
+                    });
                 }
 
                 @Override
@@ -147,15 +154,10 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     String[] TOPIC_WILL = new String[]{
-            "/topic/command/takePhoto/request",
-            "/topic/command/takePhoto/response",
-            "/topic/command/takePhoto/test",
-            "/mqtt/topic/012",
-            "/mqtt/topic/013",
-            "/mqtt/topic/0"
+            "/topic/command/takePhoto/response"
     };
     int[] TOPIC_WILL_QOS = new int[]{
-            0, 0, 0, 0, 0, 0
+            0
     };
 
     @Override
