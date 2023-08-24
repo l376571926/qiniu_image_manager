@@ -8,23 +8,19 @@ import androidx.recyclerview.widget.RecyclerView;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.Bundle;
-import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import com.bumptech.glide.Glide;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.huawei.qiniu_token.BaseToken;
-import com.huawei.qiniu_token.HexStringUtil;
 import com.huawei.qiniu_token.QiniuToken;
 import com.huawei.qiniu_token.QiniuTokenJava;
 import com.huawei.qiniu_upload.databinding.ActivityMainBinding;
 import com.huawei.qiniu_upload.databinding.LayoutListImageItemBinding;
 import com.qiniu.util.Auth;
-import com.qiniu.util.StringUtils;
 import com.qiniu.util.UrlSafeBase64;
 import com.socks.library.KLog;
 
@@ -46,14 +42,10 @@ import java.security.GeneralSecurityException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.TimeZone;
 
 import javax.crypto.Mac;
@@ -61,17 +53,17 @@ import javax.crypto.spec.SecretKeySpec;
 
 import okhttp3.Call;
 import okhttp3.Callback;
-import okhttp3.FormBody;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
 
 public class MainActivity extends AppCompatActivity implements View.OnClickListener {
 
     private static final String TAG = MainActivity.class.getSimpleName();
+    //    private static final String DATA_BUCKET = "esp32-cam-image";
+    private static final String DATA_BUCKET = "esp32-cam-image-us";
 
     private static final OkHttpClient client = new OkHttpClient();
 
@@ -82,7 +74,6 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
@@ -92,6 +83,73 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         mItemAdapter = new ItemAdapter();
         mRecyclerView.setAdapter(mItemAdapter);
 
+
+        MqttAndroidClient client1 = connectMqtt();
+        client1.setCallback(new MqttCallback() {
+            @Override
+            public void connectionLost(Throwable cause) {
+                KLog.e();
+                if (cause != null) {
+                    Toast.makeText(MainActivity.this, "connectionLost: " + cause.toString(), Toast.LENGTH_SHORT).show();
+                }
+            }
+
+            @Override
+            public void messageArrived(String topic, MqttMessage message) throws Exception {
+                String json = new String(message.getPayload());
+                KLog.e("topic = [" + topic + "],message = [" + json + "]");
+                boolean connected = client1.isConnected();
+                KLog.e("mqtt isConnected? " + connected);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        //json
+                        //{"hash":"Fu_hqjwSCkhRmOnoR1l9Z7lo2Zee","key":"image_1688383813.jpg"}
+                        //{"error":"bad token","error_code":"BadToken"}
+                        new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("提示")
+                                .setMessage(json)
+                                .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialogInterface, int i) {
+                                        listImage();
+                                    }
+                                })
+                                .show();
+                    }
+                });
+            }
+
+            @Override
+            public void deliveryComplete(IMqttDeliveryToken token) {
+            }
+        });
+        listImage();
+    }
+
+    private IMqttActionListener connectListener = new IMqttActionListener() {
+        @Override
+        public void onSuccess(IMqttToken asyncActionToken) {
+            KLog.e("mqtt server connect success");
+            Toast.makeText(MainActivity.this, "mqtt server connect success", Toast.LENGTH_SHORT).show();
+            try {
+                if (mClient != null) {
+                    IMqttToken subscribe = mClient.subscribe("/topic/command/takePhoto/response", 0);
+                    KLog.e("subscribe response ret: " + subscribe.getMessageId());
+                }
+            } catch (MqttException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        @Override
+        public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
+            KLog.e(exception.toString());
+            Toast.makeText(MainActivity.this, "mqtt server connect result: " + exception.toString(), Toast.LENGTH_SHORT).show();
+        }
+    };
+
+    private MqttAndroidClient connectMqtt() {
         String serverURI = "tcp://" + MqttUserInfo.HOST_IP + ":" + MqttUserInfo.PORT;
         String clientId = MqttUserInfo.CLIENT_ID;//设备id
         mClient = new MqttAndroidClient(this, serverURI, clientId);
@@ -99,66 +157,15 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         options.setCleanSession(true);
         options.setUserName(MqttUserInfo.USERNAME);//产品id
         options.setPassword(MqttUserInfo.PASSWORD.toCharArray());//设备id鉴权信息
+
         try {
-            mClient.connect(options, null, new IMqttActionListener() {
-                @Override
-                public void onSuccess(IMqttToken asyncActionToken) {
-                    String[] topics = asyncActionToken.getTopics();
-                    KLog.e(Arrays.toString(topics));
-                    try {
-                        if (mClient != null) {
-                            IMqttToken subscribe = mClient.subscribe(TOPIC_WILL, TOPIC_WILL_QOS);
-                            KLog.e(subscribe.getMessageId());
-                        }
-                    } catch (MqttException e) {
-                        throw new RuntimeException(e);
-                    }
-                }
-
-                @Override
-                public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
-                    KLog.e(exception.toString());
-                }
-            });
-            mClient.setCallback(new MqttCallback() {
-                @Override
-                public void connectionLost(Throwable cause) {
-                    KLog.e();
-                }
-
-                @Override
-                public void messageArrived(String topic, MqttMessage message) throws Exception {
-                    String json = new String(message.getPayload());
-                    KLog.e("topic = [" + topic + "],message = [" + json + "]");
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            Toast.makeText(MainActivity.this, topic + ":" + json, Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                }
-
-                @Override
-                public void deliveryComplete(IMqttDeliveryToken token) {
-                    try {
-                        KLog.e(token.getMessage());
-                    } catch (MqttException e) {
-                        throw new RuntimeException(e);
-                    }
-                }
-            });
+            IMqttToken token = mClient.connect(options, null, connectListener);
+            KLog.e("connect token: " + token.toString());
         } catch (MqttException e) {
             throw new RuntimeException(e);
         }
-        listImage();
+        return mClient;
     }
-
-    String[] TOPIC_WILL = new String[]{
-            "/topic/command/takePhoto/response"
-    };
-    int[] TOPIC_WILL_QOS = new int[]{
-            0
-    };
 
     @Override
     protected void onDestroy() {
@@ -187,25 +194,25 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         //InRasAWYYN4Nw8j-aX29qrE-1Ig=
         //-->
         //oE6xigv1Yh9ioaeiEicw_WTFX3Dg4DldmIGvN--c:InRasAWYYN4Nw8j-aX29qrE-1Ig=:eyJtYXAiOnsic2NvcGUiOiJlc3AzMi1jYW0taW1hZ2UiLCJkZWFkbGluZSI6MTY4NzE5MDAyN319
-        String result = auth.uploadToken("esp32-cam-image");
-//        String result = auth.uploadTokenWithDeadline("esp32-cam-image", null, deadline, null, true);
+        String result = auth.uploadToken(DATA_BUCKET);
+//        String result = auth.uploadTokenWithDeadline(DATA_BUCKET, null, deadline, null, true);
         KLog.e(TAG, "liyiwei: " + result);
     }
 
     void test1() {
         long deadline = System.currentTimeMillis() / 1000 + 3600;
 
-        String token = QiniuTokenJava.uploadTokenWithDeadline("esp32-cam-image", null, deadline, null, true);
+        String token = QiniuTokenJava.uploadTokenWithDeadline(DATA_BUCKET, null, deadline, null, true);
         KLog.e("upload token(java): " + token);
 
-        String token1 = QiniuToken.uploadTokenWithDeadline("esp32-cam-image", null, deadline, null, true);
+        String token1 = QiniuToken.uploadTokenWithDeadline(DATA_BUCKET, null, deadline, null, true);
         KLog.e("upload token(jni): " + token1);
     }
 
     public void listImage() {
         String host = "rsf.qbox.me";
 //        String path = "/list?bucket=esp32-cam-image&limit=10";
-        String path = "/list?bucket=esp32-cam-image";
+        String path = "/list?bucket=" + DATA_BUCKET;
         String x_qiniu_date = xQiniuDate();
         KLog.e("X-Qiniu-Date = " + x_qiniu_date);
         String authorization = "Qiniu " + generateListFileToken(host, path, x_qiniu_date);
@@ -232,7 +239,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 KLog.e(Thread.currentThread().getName());
 
                 String json = response.body().string();
-                KLog.e(json);
+                KLog.e("list photo result: " + json);
                 try {
                     JSONObject object = new JSONObject(json);
                     if (object.has("error")) {
@@ -270,7 +277,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         String host = "rs.qbox.me";
         String x_qiniu_date = xQiniuDate();
         KLog.e("x_qiniu_date = " + x_qiniu_date);
-        String encodedEntry = UrlSafeBase64.encodeToString("esp32-cam-image" + ":" + key);
+        String encodedEntry = UrlSafeBase64.encodeToString(DATA_BUCKET + ":" + key);
         KLog.e("encodedEntry = " + encodedEntry);
         String authorization = "Qiniu " + generateDeleteToken(host, encodedEntry, x_qiniu_date);
         KLog.e("authorization = " + authorization);
@@ -383,7 +390,9 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
      * @return
      */
     private String getDownloadUrl(String key) {
-        String url = "http://rvruzr2c3.hn-bkt.clouddn.com/" + key;
+//        String url = "http://rvruzr2c3.hn-bkt.clouddn.com/" + key;
+        String url = "http://xxsatff.top/" + key;
+//        String url = "http://iovip-na0.qiniuio.com/" + key;
         long deadline = System.currentTimeMillis() / 1000 + 3600;
 
         return QiniuTokenJava.privateDownloadUrlWithDeadline(url, deadline);
@@ -393,11 +402,17 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
      * 拍照
      */
     public void takePhoto() {
+        if (!mClient.isConnected()) {
+            KLog.e("mqtt server is disconnect");
+            connectMqtt();
+            return;
+        }
         MqttMessage message = new MqttMessage();
         String msg = "takePhoto";
         message.setPayload(msg.getBytes());
         try {
-            mClient.publish("/topic/command/takePhoto/request", message);
+            IMqttDeliveryToken token = mClient.publish("/topic/command/takePhoto/request", message);
+            Toast.makeText(this, "MessageId(): " + token.getMessageId(), Toast.LENGTH_SHORT).show();
         } catch (MqttException e) {
             throw new RuntimeException(e);
         }
@@ -432,7 +447,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         } else if (viewId == R.id.list_token_btn) {
             String host = "rsf.qbox.me";
 //        String path = "/list?bucket=esp32-cam-image&limit=10";
-            String path = "/list?bucket=esp32-cam-image";
+            String path = "/list?bucket=" + DATA_BUCKET;
             String x_qiniu_date = xQiniuDate();
             KLog.e("X-Qiniu-Date = " + x_qiniu_date);
             String authorization = "Qiniu " + generateListFileToken(host, path, x_qiniu_date);
